@@ -2,3 +2,5 @@ public_data
 starting_kit
 status
 code/DataAnalysis.ipynb
+code/.ipynb_checkpoints/
+code/__pycache__/
