@@ -69,4 +69,18 @@ def mask_pic(coord, pic_size=(257, 257)):  # Hard-coded size of the picture
             timg[tuple(pixels)] = 1
 
     return timg.T.unsqueeze(0)
+
+
+def transform_coordinates_back(idcs, M):
+    """Undoes the perspective transformation given by M on a tuple of indices idcs. idcs must have the following shape ((x1, x2, x3, ...), (y1, y2, y3, ...))"""
+    # Flip and concatenate with a number 1 (it is assumed that t_i = 1 in equation in https://docs.opencv.org/4.x/da/d54/group__imgproc__transform.html#ga20f62aa3235d869c9956436c870893ae)
+    # may be a source of the error
+    idcs1 = np.concatenate((idcs[::-1], np.ones((1, len(idcs[0])))), axis=0)
+
+    # Multiply with the inverse of the perspective transformation matrix
+    idcs_dst = np.round(np.linalg.inv(M)@idcs1)
+
+    # Convert to a list of tuples and flip
+    idcs_dst = [tuple(lst) for lst in idcs_dst[:2].astype('u1').tolist()][::-1]
+    return tuple(idcs_dst)
     
