@@ -14,7 +14,6 @@ import os
 import numpy as np
 import json
 import glob
-import skimage.io
 from matplotlib import pyplot as plt
 import skimage.io
 import cv2
@@ -34,6 +33,8 @@ class Model:
         os.path.join(os.path.dirname(__file__), 'subdir')
         
         """
+
+        
     def predict(self, data_set_directory):
         """
         This function should provide predictions of labels on a data set.
@@ -42,11 +43,32 @@ class Model:
         data_set_dictionary.
         """
         predictions = []
+        
         input_files = glob.glob(os.path.join(os.path.abspath(data_set_directory), '*.tiff'))
+
+
+        print(len(input_files))
+        
         for i in range(len(input_files)):
             img = self.read_img1(input_files[i])
+
+
+
+
+
+            
             img2 = self.preprocess1(img)
+
+
+
+
+            
             rect1, M1 = self.detect_rect(img2)
+
+
+
+
+            
             points1, num_pills1 = self.detect_points(rect1)
             missing_pills1, present_pills1 = self.pill_present_detection(points1, rect1, num_pills1)
             pill_dict1 = self.transformed_points(missing_pills1, present_pills1, M1)
@@ -55,7 +77,11 @@ class Model:
             label["coordinates"] = pill_dict1
             label["missing_pills"] = len(missing_pills1)
             label["present_pills"] = len(present_pills1)
+
+            
+            
             predictions.append(label)
+            
 
         # return list of dictionaries whose length matches the number of tiff files
         return predictions
@@ -64,37 +90,37 @@ class Model:
     def read_img1(self, tiff_path):
 
         img = skimage.io.imread(tiff_path)
-        rgbArray1 = np.full((257,257,3),0, 'uint8')
+        rgbArray1 = np.full((257,257,3),0, 'uint8')  #uint coversion time reduce
+        
         for i in range(img.shape[2]):
-            rgbArray1[..., i] = 3 * np.log10(img[:, :, i])
-        return rgbArray1
+            rgbArray1[..., i] = 3 * np.log10(img[:, :, i])   #why 3 dots??  #Can we only use 1 plane??
+        return rgbArray1[:,:,1]
+
+    
 
     def preprocess1(self, rgbArray1):
         kmeans = KMeans(n_clusters=2, random_state=0)
-        kmeans.fit(rgbArray1.reshape(-1, 3))
+        #kmeans.fit(rgbArray1.reshape(-1, 3))
+
+        kmeans.fit(rgbArray1.reshape(-1, 1))
         res = kmeans.labels_.reshape(257, 257)
         res = 255 * res
         counts, bin = np.histogram(res.flatten())
         if counts[0] > counts[-1]:
-            a = 255 * np.ones((257,257))
-            res = a - res
+            #a = 255 * np.ones((257,257))
+            res = 255 - res
         res = res.astype('u1')       
         return res
 
+
+
+
+
     def detect_rect(self, res):
-        edges1 = feature.canny(res.reshape(257,257), sigma = 10)
+        edges1 = feature.canny(res, sigma = 10)
         coords = corner_peaks(corner_harris(edges1), min_distance=1, threshold_rel=0.1)
         coords[:,[0, 1]] = coords[:,[1, 0]]
         
-        rect = cv2.minAreaRect(coords)
-        box = cv2.boxPoints(rect)
-        box = np.int0(box)
-
-        top_left_x = min(box[:,1])
-        top_left_y = min(box[:,0])
-        bot_right_x = max(box[:,1])
-        bot_right_y = max(box[:,0])
-
         rect = cv2.minAreaRect(coords)
         box = cv2.boxPoints(rect) # cv2.boxPoints(rect) for OpenCV 3.x
         box = np.int0(box)
@@ -182,7 +208,7 @@ class Model:
 
             hist, bin_edges = np.histogram(rect[y1:y2, x1:x2].flatten())
 
-            if hist[0] > hist[-1] + 25:
+            if hist[0] > hist[-1] + 20:
                 present_pills.append(points[i])
             else: 
                 missing_pills.append(points[i])
@@ -204,12 +230,13 @@ class Model:
             tra_missing = np.vstack((new[0], new[1])).T
             tra_missing[:, [0, 1]] =  tra_missing[:,[1, 0]]
             
-            dummy1 = 257 * np.ones(tra_missing.shape[0])
-            tra_missing[:, 1] = dummy1 - tra_missing[:, 1]
-            
-            dict_coords["missing"] = tra_missing
+            #dummy1 = 257 * np.ones(tra_missing.shape[0])
+            tra_missing[:, 1] = 257 - tra_missing[:, 1]
+
+            dict_coords["missing"] = tra_missing.tolist()
         else:
             dict_coords["missing"] = []
+            
                     
 
         if len(present_pills) != 0:
@@ -220,10 +247,12 @@ class Model:
             tra_present = np.vstack((new[0], new[1])).T
             tra_present[:, [0, 1]] =  tra_present[:, [1, 0]]
             
-            dummy2 = 257*np.ones(tra_present.shape[0])
-            tra_present[:,1] = dummy2 - tra_present[:,1]
+            #dummy2 = 257*np.ones(tra_present.shape[0])
+            tra_present[:,1] = 257 - tra_present[:,1]
+
             
-            dict_coords["present"] = tra_present
+            
+            dict_coords["present"] = tra_present.tolist()
         else:
             dict_coords["present"] = []
         
@@ -242,3 +271,49 @@ class Model:
         # Convert to a list of tuples and flip
         idcs_dst = [tuple(lst) for lst in idcs_dst[:2].astype('u1').tolist()][::-1]
         return tuple(idcs_dst)
+
+    @staticmethod
+    def visualize_microwave_volume(input_file, dynamic_range=25, label=None):
+            """
+            Visualize the slices of a microwave image volume in logarithmic scale with the given dynamic_range
+            :param string input_file: Path to input file
+            :param float dynamic_range: Dynamic range in dB (default: 25)
+            """
+
+            img = skimage.io.imread(input_file)
+
+            if label is None:
+                label_filename = input_file.replace('.tiff', '.json')
+                if os.path.exists(label_filename):
+                    with open(label_filename, 'r') as file:
+                        label = json.loads(file.read())
+
+            fig, axs = plt.subplots(1, 3, figsize=(16, 7))
+            for i in range(img.shape[2]):
+                volume = 10 * np.log10(img[:, :, i])
+                max_val = np.max(volume)
+                
+##                kmeans = KMeans(n_clusters=2, random_state=0)
+##                kmeans.fit(volume)
+##                res = kmeans.labels_.reshape(257)
+                
+                axs[i].imshow(volume)
+                
+                axs[i].set_title(f"Slice {i + 1:d}")
+
+                if label is not None:
+                    x_coords = [coord[0] for coord in label['coordinates']['present']]
+                    y_coords = [257-coord[1] for coord in label['coordinates']['present']]
+                    axs[i].scatter(x_coords, y_coords, color='white')
+
+                    x_coords = [coord[0] for coord in label['coordinates']['missing']]
+                    y_coords = [257 - coord[1] for coord in label['coordinates']['missing']]
+                    axs[i].scatter(x_coords, y_coords, color='red')
+
+            if label is not None:
+                fig.canvas.set_window_title(f"Present pills: {len(label['coordinates']['present'])}, "
+                                            f"Missing pills: {len(label['coordinates']['missing'])}")
+
+            plt.show()
+
+
