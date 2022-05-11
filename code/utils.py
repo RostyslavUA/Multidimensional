@@ -3,6 +3,7 @@ import json
 import numpy as np
 import torch
 from PIL import Image
+import matplotlib.pyplot as plt
 
 
 def process_coord(_coord_missing, _coord_present):
@@ -84,3 +85,31 @@ def transform_coordinates_back(idcs, M):
     idcs_dst = [tuple(lst) for lst in idcs_dst[:2].astype('u1').tolist()][::-1]
     return tuple(idcs_dst)
     
+def get_px_values(img, coord_miss, coord_pres, width=10, height=10, plot=False):
+    """Function returns the pixel values around missing and present pills and the sum of some set of pixels around missing and
+    present pills. Plotting option is available"""
+    _coord_missing, _coord_present = [], []
+    _pxs_missing, _pxs_present = [], []
+    _pxs_missing_sum, _pxs_present_sum = [], []
+    for coord in coord_miss:
+        _coord_missing.append((slice(257-coord[1]-height//2, 257-coord[1]+height//2), slice(coord[0]-width//2, coord[0]+width//2), 0))
+        _pxs_missing.append(img[_coord_missing[-1]].flatten())  # We do not need to keep dimensionality anymore  
+        _pxs_missing_sum.append(img[_coord_missing[-1]].flatten().sum())
+    for coord in coord_pres:
+        _coord_present.append((slice(257-coord[1]-height//2, 257-coord[1]+height//2), slice(coord[0]-width//2, coord[0]+width//2), 0))
+        _pxs_present.append(img[_coord_present[-1]].flatten())
+        _pxs_present_sum.append(img[_coord_present[-1]].flatten().sum())
+        
+    if plot:
+        _img = img.copy()
+        for coord_slice in _coord_missing:
+            _img[coord_slice] = 2  # Set to some value to see the difference
+        for coord_slice in _coord_present:
+            _img[coord_slice] = 1  # Set to smaller value to see the dfiiference between missing and present pills
+            plt.imshow(_img[:, :, 0], cmap='bwr')
+    pxs_missing = np.concatenate(_pxs_missing).flatten() if len(_pxs_missing) else np.array([])
+    pxs_present = np.concatenate(_pxs_present).flatten() if len(_pxs_present) else np.array([])
+    
+    pxs_missing_sum = np.array(_pxs_missing_sum).flatten() if len(_pxs_missing_sum) else np.array([])
+    pxs_present_sum =  np.array(_pxs_present_sum).flatten() if len(_pxs_present_sum) else np.array([])
+    return pxs_missing, pxs_present, pxs_missing_sum, pxs_present_sum
