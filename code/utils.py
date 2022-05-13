@@ -85,9 +85,13 @@ def transform_coordinates_back(idcs, M):
     idcs_dst = [tuple(lst) for lst in idcs_dst[:2].astype('u1').tolist()][::-1]
     return tuple(idcs_dst)
     
+    
 def get_px_values(img, coord_miss, coord_pres, width=10, height=10, plot=False):
     """Function returns the pixel values around missing and present pills and the sum of some set of pixels around missing and
     present pills. Plotting option is available"""
+
+    # Normalize to the sum intensity of the picture
+    img[:, :, 0] = img[:, :, 0]/img[:, :, 0].sum()
     _coord_missing, _coord_present = [], []
     _pxs_missing, _pxs_present = [], []
     _pxs_missing_sum, _pxs_present_sum = [], []
@@ -112,4 +116,32 @@ def get_px_values(img, coord_miss, coord_pres, width=10, height=10, plot=False):
     
     pxs_missing_sum = np.array(_pxs_missing_sum).flatten() if len(_pxs_missing_sum) else np.array([])
     pxs_present_sum =  np.array(_pxs_present_sum).flatten() if len(_pxs_present_sum) else np.array([])
-    return pxs_missing, pxs_present, pxs_missing_sum, pxs_present_sum
+    return pxs_missing, pxs_present, pxs_missing_sum/(width*height), pxs_present_sum/(width*height)
+
+
+def swindow(arr, width=2, height=2, padding=True, normalize=True):
+    """Sliding window over a ndarray. For every new position of the window, saves a sum of the px values into _sum.
+    To preserve dimensionality, zero-padding option is available. Normalization option is available too"""
+    
+    arr = arr/arr.sum() if normalize else arr
+    if padding:
+        arr = np.concatenate((arr, np.zeros((arr.shape[0], 1))), axis=-1)  # Concatenate a column from a right
+        arr = np.concatenate((arr, np.zeros((1, arr.shape[-1]))), axis=0)  # Concatenate a colum below
+    _sum = []
+    for i in range(arr.shape[0] - 1):
+        for j in range(arr.shape[-1] - 1):
+            _sum.append(arr[i:i+width, j:j+height].sum())
+    summask = np.array(_sum).reshape(arr.shape[0]-1, arr.shape[-1]-1)
+     # Normalize to the pic size if needed
+    return summask/(width*height) if normalize else summask
+
+def swindow_mask(img, w=2, h=2):
+    """Apply a sliding window on the three slices, compute its mean and classify the pixels based on their values"""
+    mask1, mask2, mask3 = swindow(img[:, :, 0], w, h), swindow(img[:, :, 1], w, h), swindow(img[:, :, 2], w, h)
+    masks_mean = np.array([mask1, mask2, mask3]).mean(axis=0)
+    
+    # Numbers are coming from the observed distributions of the pixel values of the missing/present pills
+    masks_mean[np.logical_or(masks_mean<0.4e-5, masks_mean>9e-5)] = -1  # Blister and empty space
+    masks_mean[np.logical_and(masks_mean>0.4e-5, masks_mean<2.5e-5)] = 0  # Missing pill
+    masks_mean[np.logical_and(masks_mean>2.5e-5, masks_mean<9e-5)] = 1  # Present pill
+    return masks_mean
