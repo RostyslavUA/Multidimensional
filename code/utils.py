@@ -44,32 +44,32 @@ def process_samples(path, sample_names):
         _samples.append(np.array(Image.open(osp.join(path, name))))
     return _samples
 
-
-def mask_pic(coord, pic_size=(257, 257)):  # Hard-coded size of the picture
-    """Function generates a picture mask from the missing and present pills' coordinates. When casting a picture to a matrix, the first-row, first-column entry represents a top-left pixel of the picture. It corresponds to the coordinate (0, 0). But the (0, 0) coordinate of missing/present pills' given in .tiff files represents the bottom-left pixel. This means that we are dealing with two different coordinate systems. The transformations present in this function ensure that the coordinates of the pic and the resulting mask have one-to-one correspondence"""
+# Deprecated. See new mask_pic function below
+# def mask_pic(coord, pic_size=(257, 257)):  # Hard-coded size of the picture  
+#     """Function generates a picture mask from the missing and present pills' coordinates. When casting a picture to a matrix, the first-row, first-column entry represents a top-left pixel of the picture. It corresponds to the coordinate (0, 0). But the (0, 0) coordinate of missing/present pills' given in .tiff files represents the bottom-left pixel. This means that we are dealing with two different coordinate systems. The transformations present in this function ensure that the coordinates of the pic and the resulting mask have one-to-one correspondence"""
     
-    timg = torch.full(pic_size, 0).type(torch.float)  # Ternary image
+#     timg = torch.full(pic_size, 0).type(torch.float)  # Ternary image
 
-    pixels = torch.round(coord).type(torch.long)  # Rounded coordinate values of missing/present pills, correspond to the pixels they are shown at
+#     pixels = torch.round(coord).type(torch.long)  # Rounded coordinate values of missing/present pills, correspond to the pixels they are shown at
 
-    pixels_m = pixels[:, :2].unique(dim=0)  # Missing pills' coordinates
-    pixels_m[:, 1] = 257 - pixels_m[:, 1]  # Y-coord is flipped
+#     pixels_m = pixels[:, :2].unique(dim=0)  # Missing pills' coordinates
+#     pixels_m[:, 1] = 257 - pixels_m[:, 1]  # Y-coord is flipped
 
-    pixels_p = pixels[:, 2:].unique(dim=0)  # Present pills' coordinates
-    pixels_p[:, 1] = 257 - pixels_p[:, 1] 
+#     pixels_p = pixels[:, 2:].unique(dim=0)  # Present pills' coordinates
+#     pixels_p[:, 1] = 257 - pixels_p[:, 1] 
 
-    # Set the values of the pixels corresponding to missing pills to 0.5
-    # I believe, there is a more elegant way of doing so
-    for pixels in pixels_m:
-        if pixels.tolist() != [0, 257]:  # 0, 257 isn't a coordinate. It means that pill is neither missing nor present. Maybe a pitfall if the missing/present pills is shown exactly at the coordinate (0, 0) (coordinate system in .tiff)
-            timg[tuple(pixels)] = 0.5
+#     # Set the values of the pixels corresponding to missing pills to 0.5
+#     # I believe, there is a more elegant way of doing so
+#     for pixels in pixels_m:
+#         if pixels.tolist() != [0, 257]:  # 0, 257 isn't a coordinate. It means that pill is neither missing nor present. Maybe a pitfall if the missing/present pills is shown exactly at the coordinate (0, 0) (coordinate system in .tiff)
+#             timg[tuple(pixels)] = 0.5
 
-    # Set the values of the pixels corresponding to present pills to 1
-    for pixels in pixels_p:
-        if pixels.tolist() != [0, 257]:  
-            timg[tuple(pixels)] = 1
+#     # Set the values of the pixels corresponding to present pills to 1
+#     for pixels in pixels_p:
+#         if pixels.tolist() != [0, 257]:  
+#             timg[tuple(pixels)] = 1
 
-    return timg.T.unsqueeze(0)
+#     return timg.T.unsqueeze(0)
 
 
 def transform_coordinates_back(idcs, M):
@@ -130,10 +130,11 @@ def swindow(arr, width=2, height=2, padding=True, normalize=True):
     _sum = []
     for i in range(arr.shape[0] - 1):
         for j in range(arr.shape[-1] - 1):
-            _sum.append(arr[i:i+width, j:j+height].sum())
+            _sum.append(arr[i:i+width, j:j+height].mean())  # temporarily replace by mean
     summask = np.array(_sum).reshape(arr.shape[0]-1, arr.shape[-1]-1)
      # Normalize to the pic size if needed
     return summask/(width*height) if normalize else summask
+
 
 def swindow_mask(img, w=2, h=2):
     """Apply a sliding window on the three slices, compute its mean and classify the pixels based on their values"""
@@ -145,3 +146,36 @@ def swindow_mask(img, w=2, h=2):
     masks_mean[np.logical_and(masks_mean>0.4e-5, masks_mean<2.5e-5)] = 0  # Missing pill
     masks_mean[np.logical_and(masks_mean>2.5e-5, masks_mean<9e-5)] = 1  # Present pill
     return masks_mean
+
+
+def adjust_coordinates(coor):
+    """Flip coordinates (labels provided by R&S) and cast them to tuple. You can use it direcly after uploading the labels 
+    i.e., adjust_coordinates(d['coordinates']['present']). Output of this function is then supplied into transform_coordinates
+    function"""
+    _coor = np.array(coor)
+    _coor[:, 1] = 257 - _coor[:, 1]  # Flipped y-axis
+    coor_adj = tuple(tuple(val) for val in _coor)  # Coordinae adjusted
+    return coor_adj
+
+
+def transform_coordinates(coord, M, was_vertical):
+    """Transform coordinates to match the perspective of the cropped image. Rostyslav keeps all crops in a horizontal position
+    i.e., height<width. Thus, if you had to transform the crop from vertical to horizontal position, set was_vertical=True. 
+    The output of this function you will probably want to propagate through mask_pic function to obtain a mask"""
+    coord_cat = np.concatenate((coord, np.ones((len(coord), 1))), -1)  # Coordinates present concatenated
+    _coord_t = np.round(abs(M@np.expand_dims(coord_cat, 2))).squeeze(-1)[:, :2].astype('int32')  # Coordinates present transformed
+    # Cast to tuples
+    coord_t = tuple(zip(*[tuple(val) for val in _coord_t]))
+    return coord_t if was_vertical else coord_t[::-1]
+
+
+def mask_pic(img, missing_coordinates, present_coordinates, height=10, width=10, miss_val=0, pres_val=1, backg_val=0.5):
+    _img = img.copy()  # Make a deep copy
+    for val in zip(*missing_coordinates):
+        c1, c2 = val
+        _img[c1-height//2:c1+height//2, c2-width//2:c2+width//2] = miss_val
+    for val in zip(*present_coordinates):
+        c1, c2 = val
+        _img[c1-height//2:c1+height//2, c2-width//2:c2+width//2] = pres_val
+    _img[np.logical_and(_img!=miss_val, _img!=pres_val)] = 0.5  # Background and blister
+    return _img
