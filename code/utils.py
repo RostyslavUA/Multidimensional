@@ -63,18 +63,27 @@ def transform_coordinates_back(idcs, M, was_vertical):
     """Undoes the perspective transformation given by M on a tuple of indices idcs. idcs must have the following shape ((x1, x2, x3, ...), (y1, y2, y3, ...))"""
         # Flip and concatenate with a number 1 (it is assumed that t_i = 1 in equation in https://docs.opencv.org/4.x/da/d54/group__imgproc__transform.html#ga20f62aa3235d869c9956436c870893ae)
     # may be a source of the error
-    if not idcs:
+    if len(idcs)==0:
         # idcs is empty
         return ()
-    idcs1 = np.concatenate((idcs[::-1], np.ones((1, len(idcs[0])))), axis=0) if not was_vertical else np.concatenate((idcs, np.ones((1, len(idcs[0])))), axis=0)  # added if statement
+    idcs1 = np.concatenate((idcs[::-1], np.ones((1, len(idcs[0])))), axis=0) if not was_vertical else np.concatenate((idcs, np.ones((1, len(idcs[0])))), axis=0)
     
     # Multiply with the inverse of the perspective transformation matrix
     idcs_dst = np.round(np.linalg.inv(M)@idcs1)
-
     # Convert to a list of tuples and flip
     idcs_dst = [tuple(lst) for lst in idcs_dst[:2].astype('int32').tolist()]
-    return tuple(idcs_dst) if was_vertical else tuple(idcs_dst)[::-1]
-    
+    idcs_dst = tuple(idcs_dst) if was_vertical else tuple(idcs_dst)[::-1]  # return was here
+    if was_vertical and len(idcs_dst) > 0:
+        idcs_dst = idcs_dst[::-1]
+    # Adjust the coordinates so that they match provided labels
+    predicted_coordinates = np.array(list(zip(*idcs_dst)))
+    if predicted_coordinates.size:
+        predicted_coordinates[:, 0] = 257 - predicted_coordinates[:, 0]
+        predicted_coordinates[:, [0, 1]] = predicted_coordinates[:, [1, 0]]
+        predicted_coordinates = predicted_coordinates.tolist()
+    else:
+        predicted_coordinates = predicted_coordinates.tolist()
+    return predicted_coordinates
     
 def get_px_values(img, coord_miss, coord_pres, width=10, height=10, plot=False):
     """Function returns the pixel values around missing and present pills and the sum of some set of pixels around missing and
@@ -200,58 +209,145 @@ def crop(img):
         warped = warped.transpose(1, 0, 2)  # Ensure horizontal orientation
     return warped, M, was_vertical
 
-
-def crop_pill(img, img_copy, save_for_histo=False, plot=False):
-    """Functions extracs the pills from the cropped blister. If img_copy is used to collect the values for histogram, it should 
-    already contain the pixel's with the known values (usually 10 for present pill). save_for_histo option saves the cropped
-    pills into the lists of missing/present pills. Plotting option is available."""
-    """Copy for plotting in order to see missing and present pills and to not distort histo"""
-    img_norm = img/(img.shape[0]*img.shape[1]*img.sum(axis=(0, 1)))  # Probably normalizing to norm (||x||_2) would make more sense
-    img_norm = img_norm - img_norm.mean()
-    img_norm = img_norm*1/img_norm.std()
-
+# Deprecated, since it has too many local variables. Replaced by crop_pills_and_save_coordinates & crop_pills_and_save_stats
+# def crop_pill(img, img_copy, save_for_histo=False, plot=False):
+#     """Functions extracts the pills from the cropped blister. If img_copy is used to collect the values for histogram,
+#      it should already contain the pixel's with the known values (usually 10 for present pill). save_for_histo option
+#      saves the cropped pills into the lists of missing/present pills. Plotting option is available."""
     
-    img_nl =  img_norm**3  # Apply a nonlinear transformation to separate the values of missing and present pills
-    
+#     img = normalize_pic(img)
+#     img = non_lin_transform(img)
+
+#     idx_col_center = img.shape[1]//2
+#     width = img.shape[1]//10
+#     shift_col = 2*(img.shape[1]//10-1)
+
+#     nr_rows = 2 if img.shape[1] < 135 else 3  # 2 or 3 rows in the blister
+#     idx_row_center = img.shape[0]//nr_rows
+
+#     # Lists for histograms
+#     _miss_px_vals = []
+#     _pres_px_vals = []
+
+#     # Lists for saving coordinates
+#     _coorm = []
+#     _coorp = []
+#     for i in range(nr_rows):
+#         for j in range(-2, 3):
+#             # Extract the non-linearly-transformed pills
+#             pill_cell = img[i*idx_row_center:(i+1)*idx_row_center,
+#                                idx_col_center-width+j*shift_col:idx_col_center+width+j*shift_col]
+#             if pill_cell.flatten().mean() < -0.6:
+#                 _coorm.append((pill_cell.shape[0]//2+i*idx_row_center, idx_col_center+j*shift_col))  # Predicted missing
+#             else:
+#                 _coorp.append((pill_cell.shape[0]//2+i*idx_row_center, idx_col_center+j*shift_col))  # Predicted present
+#             if save_for_histo:
+#             # Save the crops of the pills for plotting histogram
+#                 if (img_copy[i*idx_row_center:(i+1)*idx_row_center,
+#                     idx_col_center-width+j*shift_col:idx_col_center+width+j*shift_col] == 10).any():
+#                     # If any of pixel values equals 10 (we have set it intentionally previously), it is a present pill
+#                     _pres_px_vals.append(pill_cell.flatten())
+#                 else:
+#                     _miss_px_vals.append(pill_cell.flatten())
+
+#             if plot:
+#                 # Plot a cropped pill and the corresponding histogram. Note that histogram values are after non-linear
+#                 # transformation
+#                 _, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+#                 ax1.imshow(img_copy[i*idx_row_center:(i+1)*idx_row_center,
+#                                    idx_col_center-width+j*shift_col:idx_col_center+width+j*shift_col])
+#                 ax2.hist(pill_cell.flatten(), color='brown', label='Pixel intensities of a cropped pill')
+#                 #ax2.set_xlim([-3, 4])
+#                 #ax2.set_ylim([0, 1000])
+#                 plt.legend()
+#                 #plt.savefig('../status/crop_and_histo.jpg')
+#                 plt.show()
+#     return _coorm, _coorp, np.array(_miss_px_vals).flatten(), np.array(_pres_px_vals).flatten()
+
+def normalize_pic(img):
+    """Function normalizes a each slice to its Frobenius norm with subsequent transformation of mean and std. The resulting
+    slice's pixel distribution has the following parameters: mean = 0 and std = 1"""
+    img_norm = img/(np.linalg.norm(img, 'fro', axis=(0, 1)))  # Frobenius norm
+    img_norm = img_norm - img_norm.mean(axis=(0, 1))
+    img_norm = img_norm*1/img_norm.std(axis=(0, 1))
+    return img_norm
+
+def non_lin_transform(img):
+    """Function applies non-linear transformation to make the missing and present pill's distributions linearly separable"""
+    img_nl = img**3  # Apply a nonlinear transformation to separate the values of missing and present pills
+    return img_nl
+
+def pill_cropping_pars(img):
+    """Function returns pill cropping parameters that depend on the image size"""
     idx_col_center = img.shape[1]//2
     width = img.shape[1]//10
     shift_col = 2*(img.shape[1]//10-1)
-
     nr_rows = 2 if img.shape[1] < 135 else 3  # 2 or 3 rows in the blister
     idx_row_center = img.shape[0]//nr_rows
-    
+    return idx_col_center, width, shift_col, nr_rows, idx_row_center
+
+def crop_pills_and_save_coordinates(img):
+    """Functions extracts the pills from the cropped blister. If img_copy is used to collect the values for histogram,
+     it should already contain the pixel's with the known values (usually 10 for present pill). save_for_histo option
+     saves the cropped pills into the lists of missing/present pills. Plotting option is available."""
+    idx_col_center, width, shift_col, nr_rows, idx_row_center = pill_cropping_pars(img)
+    # Lists for saving coordinates
+    _coorm, _coorp = [], []
+    for i in range(nr_rows):
+        for j in range(-2, 3):
+            # Crop the pills
+            pill_cell = img[i*idx_row_center:(i+1)*idx_row_center,
+                               idx_col_center-width+j*shift_col:idx_col_center+width+j*shift_col]
+            if pill_cell.flatten().mean() < -0.6:
+                # Predicted missing
+                _coorm.append((pill_cell.shape[0]//2+i*idx_row_center, idx_col_center+j*shift_col))  
+            else:
+                # Predicted present
+                _coorp.append((pill_cell.shape[0]//2+i*idx_row_center, idx_col_center+j*shift_col))  
+    return _coorm, _coorp
+
+def crop_pills_and_save_stats(img, coorp_t, plot=False):
+    """Function collects the statistic of the pixel values associated with the missing/present pills. At the input the 
+    function expect the cropped image and the correspondingly transformed coordinates of the present pills. The pixel's values
+    associated with these coordinates will be set to 10. By doing so, we will be able to classify missing and present pills.
+    Plotting option is available"""
+    # Make a deep copy (changing a copy won't change the original img)
+    img_copy = img.copy()
+    # Set to a known pixel value, so that later we can identify whether the pill is missing or present
+    img_copy[coorp_t] = 10
+    idx_col_center, width, shift_col, nr_rows, idx_row_center = pill_cropping_pars(img)
     # Lists for histograms
     _miss_px_vals = []
     _pres_px_vals = []
-    
-    # Lists for saving coordinates
-    _coorm = []
-    _coorp = []
     for i in range(nr_rows):
-        for j in range(-2, 3):
-            # Extract the non-linearly-transformed pills
-            pill_cell = img_nl[i*idx_row_center:(i+1)*idx_row_center, 
-                               idx_col_center-width+j*shift_col:idx_col_center+width+j*shift_col]            
-            if  pill_cell.flatten().mean() < 0.5:
-                # If the mean of the pixel intensities of the cropped pill < 0.5, it is a missing pill
-                predicted_missing = (pill_cell.shape[0]//2+i*idx_row_center, idx_col_center+j*shift_col)
-                _coorm.append(predicted_missing)
+        for j in range(-2, 3):  # 5 columns
+            # Crop of a pill's cell
+            pill_cell = img[i*idx_row_center:(i+1)*idx_row_center,
+                               idx_col_center-width+j*shift_col:idx_col_center+width+j*shift_col]
+            if (img_copy[i*idx_row_center:(i+1)*idx_row_center,
+                idx_col_center-width+j*shift_col:idx_col_center+width+j*shift_col] == 10).any():
+                # If any of pixel values equals 10 (we have set it intentionally previously), it is a present pill
+                _pres_px_vals.append(pill_cell.flatten())
             else:
-                predicted_present = (pill_cell.shape[0]//2+i*idx_row_center, idx_col_center+j*shift_col)
-                _coorp.append(predicted_present)
-            if save_for_histo:
-            # Save the crops of the pills for plotting histogram
-                if (img_copy[i*idx_row_center:(i+1)*idx_row_center, idx_col_center-width+j*shift_col:idx_col_center+width+j*shift_col] == 10).any():
-                    # If any of pixel values equals 10 (we have set it intentionally previously), it is a present pill 
-                    _pres_px_vals.append(pill_cell.flatten().mean())
-                else:
-                    _miss_px_vals.append(pill_cell.flatten().mean())
-
+                _miss_px_vals.append(pill_cell.flatten())
             if plot:
-                # Plot a cropped pill and the corresponding histogram. Note that histogram values are after non-linear transformation
-                f, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
-                ax1.imshow(img_copy[i*idx_row_center:(i+1)*idx_row_center, 
+                # Plot a cropped pill and the corresponding histogram. Note that histogram values are after non-linear
+                # transformation
+                _, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+                ax1.imshow(img_copy[i*idx_row_center:(i+1)*idx_row_center,
                                    idx_col_center-width+j*shift_col:idx_col_center+width+j*shift_col])
-                ax2.hist(pill_cell.flatten())
+                ax2.hist(pill_cell.flatten(), color='brown', label='Pixel intensities of a cropped pill')
+                #ax2.set_xlim([-3, 4])
+                #ax2.set_ylim([0, 1000])
+                plt.legend()
+                #plt.savefig('../status/crop_and_histo.jpg')
                 plt.show()
-    return _coorm, _coorp, np.array(_miss_px_vals).flatten(), np.array(_pres_px_vals).flatten()
+    return np.array(_miss_px_vals).flatten(), np.array(_pres_px_vals).flatten()
+
+def transform_label_coordinates(missing_coordinates, present_coordinates, M, was_vertical):
+    """Function thransforms the coordinates of the provided labels to the coordinate frame given by the crop"""
+    coorm = adjust_coordinates(missing_coordinates)
+    coorp = adjust_coordinates(present_coordinates)
+    coorm_t = transform_coordinates(coorm, M, was_vertical)  # _t stands for tansformed
+    coorp_t = transform_coordinates(coorp, M, was_vertical)
+    return coorm_t, coorp_t
