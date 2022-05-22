@@ -294,12 +294,14 @@ def crop_pills_and_save_coordinates(img):
     idx_col_center, width, shift_col, nr_rows, idx_row_center = pill_cropping_pars(img)
     # Lists for saving coordinates
     _coorm, _coorp = [], []
+    cx_cy_array = []
     for i in range(nr_rows):
         for j in range(-2, 3):
             # Crop the pills
             pill_cell = img[i*idx_row_center:(i+1)*idx_row_center,
                                idx_col_center-width+j*shift_col:idx_col_center+width+j*shift_col]
             cx, cy = get_centroid(pill_cell)
+            cx_cy_array.append(((cy+i*idx_row_center),(cx-width+idx_col_center+j*shift_col)))
             if pill_cell.flatten().mean() < -0.6:
                 # Predicted missing
                 #_coorm.append((pill_cell.shape[0]//2+i*idx_row_center, idx_col_center+j*shift_col))
@@ -308,7 +310,7 @@ def crop_pills_and_save_coordinates(img):
                 # Predicted present
                 #_coorp.append((pill_cell.shape[0]//2+i*idx_row_center, idx_col_center+j*shift_col))  
                 _coorp.append((cy+i*idx_row_center, cx-width+idx_col_center+j*shift_col))  # Assuming 5 rows
-    return _coorm, _coorp
+    return _coorm, _coorp, cx_cy_array 
 
 def crop_pills_and_save_stats(img, coorp_t, plot=False):
     """Function collects the statistic of the pixel values associated with the missing/present pills. At the input the 
@@ -356,7 +358,7 @@ def transform_label_coordinates(missing_coordinates, present_coordinates, M, was
     coorp_t = transform_coordinates(coorp, M, was_vertical)
     return coorm_t, coorp_t
 
-def get_centroid(pill_cell):
+def get_centroid(pill_cell, plot=True):
     """Function computes centroid of the pill's cell"""
      # Comnsider using only one slice to reduce overhead
     thresh0 = threshold_otsu(pill_cell[:, :, 0])
@@ -369,6 +371,10 @@ def get_centroid(pill_cell):
     moms = cv2.moments(np.int8(bin_img), binaryImage=True)
     cx = int(moms['m10']/moms['m00'])
     cy = int(moms['m01']/moms['m00'])
+    if plot:
+        _, (ax1) = plt.subplots(1, 1)
+        ax1.imshow((bin_img), cmap = "gray") 
+        ax1.scatter(cx,cy, color='r', label="pill center")
     return cx, cy
 
 def get_pills_crops(img, coorp_t):
