@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import cv2
 from skimage.feature import canny, corner_harris, corner_peaks
+from skimage.filters import threshold_otsu
 from scipy import fft
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -298,12 +299,15 @@ def crop_pills_and_save_coordinates(img):
             # Crop the pills
             pill_cell = img[i*idx_row_center:(i+1)*idx_row_center,
                                idx_col_center-width+j*shift_col:idx_col_center+width+j*shift_col]
+            cx, cy = get_centroid(pill_cell)
             if pill_cell.flatten().mean() < -0.6:
                 # Predicted missing
-                _coorm.append((pill_cell.shape[0]//2+i*idx_row_center, idx_col_center+j*shift_col))  
+                #_coorm.append((pill_cell.shape[0]//2+i*idx_row_center, idx_col_center+j*shift_col))
+                _coorm.append((cy+i*idx_row_center, cx-width+idx_col_center+j*shift_col))  # Assuming 5 rows
             else:
                 # Predicted present
-                _coorp.append((pill_cell.shape[0]//2+i*idx_row_center, idx_col_center+j*shift_col))  
+                #_coorp.append((pill_cell.shape[0]//2+i*idx_row_center, idx_col_center+j*shift_col))  
+                _coorp.append((cy+i*idx_row_center, cx-width+idx_col_center+j*shift_col))  # Assuming 5 rows
     return _coorm, _coorp
 
 def crop_pills_and_save_stats(img, coorp_t, plot=False):
@@ -327,9 +331,9 @@ def crop_pills_and_save_stats(img, coorp_t, plot=False):
             if (img_copy[i*idx_row_center:(i+1)*idx_row_center,
                 idx_col_center-width+j*shift_col:idx_col_center+width+j*shift_col] == 10).any():
                 # If any of pixel values equals 10 (we have set it intentionally previously), it is a present pill
-                _pres_px_vals.append(pill_cell.flatten())
+                _pres_px_vals.append(pill_cell.flatten().mean())
             else:
-                _miss_px_vals.append(pill_cell.flatten())
+                _miss_px_vals.append(pill_cell.flatten().mean())
             if plot:
                 # Plot a cropped pill and the corresponding histogram. Note that histogram values are after non-linear
                 # transformation
@@ -351,3 +355,42 @@ def transform_label_coordinates(missing_coordinates, present_coordinates, M, was
     coorm_t = transform_coordinates(coorm, M, was_vertical)  # _t stands for tansformed
     coorp_t = transform_coordinates(coorp, M, was_vertical)
     return coorm_t, coorp_t
+
+def get_centroid(pill_cell):
+    """Function computes centroid of the pill's cell"""
+     # Comnsider using only one slice to reduce overhead
+    thresh0 = threshold_otsu(pill_cell[:, :, 0])
+    thresh1 = threshold_otsu(pill_cell[:, :, 1])
+    thresh2 = threshold_otsu(pill_cell[:, :, 2])
+    bin_img0, bin_img1, bin_img2 = pill_cell[:, :, 0]<thresh0, pill_cell[:, :, 1]<thresh1, pill_cell[:, :, 2]<thresh2
+    bin_img = np.int8(bin_img0 & bin_img1 & bin_img2)
+    
+    # Calculate moments
+    moms = cv2.moments(np.int8(bin_img), binaryImage=True)
+    cx = int(moms['m10']/moms['m00'])
+    cy = int(moms['m01']/moms['m00'])
+    return cx, cy
+
+def get_pills_crops(img, coorp_t):
+    """Function returns the cropped pills from an image of a cropped blister. It differentiates between missing and 
+    present pills."""
+    # Make a deep copy (changing a copy won't change the original img)
+    img_copy = img.copy()
+    # Set to a known pixel value, so that later we can identify whether the pill is missing or present
+    img_copy[coorp_t] = 10
+    idx_col_center, width, shift_col, nr_rows, idx_row_center = pill_cropping_pars(img)
+    # Lists for histograms
+    _miss_px_vals = []
+    _pres_px_vals = []
+    for i in range(nr_rows):
+        for j in range(-2, 3):  # 5 columns
+            # Crop of a pill's cell
+            pill_cell = img[i*idx_row_center:(i+1)*idx_row_center,
+                               idx_col_center-width+j*shift_col:idx_col_center+width+j*shift_col]
+            if (img_copy[i*idx_row_center:(i+1)*idx_row_center,
+                idx_col_center-width+j*shift_col:idx_col_center+width+j*shift_col] == 10).any():
+                # If any of pixel values equals 10 (we have set it intentionally previously), it is a present pill
+                _pres_px_vals.append(pill_cell)
+            else:
+                _miss_px_vals.append(pill_cell)
+    return np.array(_miss_px_vals), np.array(_pres_px_vals)
